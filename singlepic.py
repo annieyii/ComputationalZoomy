@@ -75,4 +75,6 @@ def create_zoom_animation(img_path, depth_path, dolly_plane_depth=15, output_dir
     print(f"✅ 動畫已完成，儲存於 {video_name}")
 
 if __name__ == "__main__":
-    create_zoom_animation("pic1.png", "pic1.npz", dolly_plane_depth=15)
+    img_path = './images/raw/pic1.png'
+    depth_path = './images/raw/pic1depth.jpg'
+    create_zoom_animation(img_path, depth_path, dolly_plane_depth=15)
