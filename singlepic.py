@@ -4,15 +4,18 @@ import os
 from tqdm import tqdm
 
 def get_intrinsic(focal_mm, w, h, sensor_width_mm=36.0):
-    fx = w / sensor_width_mm * focal_mm
-    fy = h / sensor_width_mm * focal_mm
-    cx = w / 2
-    cy = h / 2
+    # 計算相機內部參數矩陣 K，將世界座標轉換為影像座標
+    # fx = w / sensor_width_mm * focal_mm
+    fx = w / sensor_width_mm * focal_mm  # 計算水平方向 focal length (pixels)
+    fy = h / sensor_width_mm * focal_mm  # 垂直方向 focal length (pixels)
+    cx = w / 2  # 主點 x 座標（影像中心）
+    cy = h / 2  # 主點 y 座標
     return np.array([[fx, 0, cx],
                      [0, fy, cy],
                      [0, 0, 1]], dtype=np.float32)
 
 def backproject(depth, K):
+    # 轉換成世界座標系
     h, w = depth.shape
     i, j = np.meshgrid(np.arange(w), np.arange(h))
     fx, fy = K[0,0], K[1,1]
@@ -23,6 +26,7 @@ def backproject(depth, K):
     return np.stack([x, y, z], axis=-1)
 
 def project(points, K):
+    # 將3D點投影到2D影像平面
     x, y, z = points[...,0], points[...,1], points[...,2]
     fx, fy = K[0,0], K[1,1]
     cx, cy = K[0,2], K[1,2]
@@ -31,9 +35,10 @@ def project(points, K):
     return u, v
 
 def warp_background(img, depth, K, scale, dolly_plane_depth):
+    # 將遠景進行縮放
     h, w = depth.shape
     points = backproject(depth, K)
-    mask_far = points[...,2] > dolly_plane_depth
+    mask_far = points[...,2] > dolly_plane_depth # 後景區域
 
     points_warped = points.copy()
     # points_warped[mask_far] *= scale  # only scale background
@@ -58,7 +63,7 @@ def create_zoom_animation(img_path, depth_path, dolly_plane_depth=15, output_dir
 
     os.makedirs(output_dir, exist_ok=True)
     n_frames = 30
-    scales = np.linspace(1.0, 1.5, n_frames)
+    scales = np.linspace(1.0, 1.5, n_frames) # 放大倍率
 
     for idx, scale in tqdm(enumerate(scales), total=n_frames):
         warped = warp_background(img, depth, K, scale=scale, dolly_plane_depth=dolly_plane_depth)
