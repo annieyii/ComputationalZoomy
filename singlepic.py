@@ -53,6 +53,12 @@ def warp_background(img, depth, K, scale, dolly_plane_depth):
                        borderMode=cv2.BORDER_CONSTANT, borderValue=0)
     return warped
 
+def get_soft_mask(depth, dolly_plane_depth, transition_width=10.0):
+    # 不要硬切dolly plane
+    delta = depth - dolly_plane_depth
+    mask = 1.0 / (1.0 + np.exp(delta / transition_width))
+    return mask.astype(np.float32)
+
 def create_zoom_animation(img_path, depth_path, dolly_plane_depth=15, output_dir="zoom_frames", video_name="zoom.mp4"):
     img = cv2.imread(img_path)[:, :, ::-1]
     depth = np.load(depth_path)["depth"]
@@ -64,11 +70,17 @@ def create_zoom_animation(img_path, depth_path, dolly_plane_depth=15, output_dir
     os.makedirs(output_dir, exist_ok=True)
     n_frames = 30
     scales = np.linspace(1.0, 1.5, n_frames) # 放大倍率
+    mask = get_soft_mask(depth, dolly_plane_depth, transition_width=1.0)
 
     for idx, scale in tqdm(enumerate(scales), total=n_frames):
         warped = warp_background(img, depth, K, scale=scale, dolly_plane_depth=dolly_plane_depth)
+        # out_path = os.path.join(output_dir, f"frame_{idx:03d}.png")
+        # cv2.imwrite(out_path, cv2.cvtColor(warped, cv2.COLOR_RGB2BGR))
+        blended = img * mask[..., np.newaxis] + warped * (1 - mask[..., np.newaxis])
+        blended = np.clip(blended, 0, 255).astype(np.uint8)
+
         out_path = os.path.join(output_dir, f"frame_{idx:03d}.png")
-        cv2.imwrite(out_path, cv2.cvtColor(warped, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(out_path, cv2.cvtColor(blended, cv2.COLOR_RGB2BGR))
 
     # create video
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
@@ -80,6 +92,7 @@ def create_zoom_animation(img_path, depth_path, dolly_plane_depth=15, output_dir
     print(f"✅ 動畫已完成，儲存於 {video_name}")
 
 if __name__ == "__main__":
-    img_path = './images/raw/pic1.png'
-    depth_path = './images/raw/pic1depth.jpg'
-    create_zoom_animation(img_path, depth_path, dolly_plane_depth=15)
+    img_path = './img/raw/pic1.png'
+    # depth_path = './img/raw/pic1depth.jpg'
+    depth_path = './img/output/pic1.npz'
+    create_zoom_animation(img_path, depth_path, dolly_plane_depth=20)
