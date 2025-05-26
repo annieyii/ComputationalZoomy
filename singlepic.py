@@ -41,7 +41,8 @@ def warp_background(img, depth, K, scale, dolly_plane_depth):
     mask_far = points[...,2] > dolly_plane_depth # 後景區域
 
     points_warped = points.copy()
-    # points_warped[mask_far] *= scale  # only scale background
+
+    # points_warped[mask_far] *= scale
     points_warped[mask_far, 0] /= scale 
     points_warped[mask_far, 1] /= scale
 
@@ -49,17 +50,39 @@ def warp_background(img, depth, K, scale, dolly_plane_depth):
     map_x = u.astype(np.float32)
     map_y = v.astype(np.float32)
 
-    warped = cv2.remap(img, map_x, map_y, interpolation=cv2.INTER_LINEAR,
+    # warped = cv2.remap(img, map_x, map_y, interpolation=cv2.INTER_LINEAR,
+    warped_full = cv2.remap(img, map_x, map_y, interpolation=cv2.INTER_LINEAR,
                        borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+    
+    warped_mask = mask_far.astype(np.float32)[..., np.newaxis]
+    warped = warped_full * warped_mask + img * (1 - warped_mask)
+
     return warped
 
+# 5.3 Robust Depth-Based Segmentation
 def get_soft_mask(depth, dolly_plane_depth, transition_width=10.0):
     # 不要硬切dolly plane
     delta = depth - dolly_plane_depth
     mask = 1.0 / (1.0 + np.exp(delta / transition_width))
     return mask.astype(np.float32)
+# def get_soft_mask_with_color(img, warped_img, depth, dolly_plane_depth, transition_width=10.0, color_threshold=15.0):
+#     """
+#     根據深度生成 soft mask，並根據色彩一致性進一步過濾
+#     """
+#     delta = depth - dolly_plane_depth
+#     soft_mask = 1.0 / (1.0 + np.exp(delta / transition_width))  # sigmoid mask
 
-def create_zoom_animation(img_path, depth_path, dolly_plane_depth=15, output_dir="zoom_frames", video_name="zoom.mp4"):
+#     # 計算原圖與 warped 圖的顏色差異（Euclidean distance in RGB space）
+#     color_diff = np.linalg.norm(img.astype(np.float32) - warped_img.astype(np.float32), axis=2)
+    
+#     # 色彩一致性 mask（顏色相近才保留）
+#     color_mask = (color_diff < color_threshold).astype(np.float32)
+
+#     # 將色彩一致性與深度 soft mask 相乘
+#     final_mask = soft_mask * color_mask
+#     return final_mask[..., np.newaxis]  # 為了方便後續乘以 RGB
+
+def create_zoom_animation(img_path, depth_path, dolly_plane_depth=15, output_dir="single_zoom_frames", video_name="single_zoom.mp4"):
     img = cv2.imread(img_path)[:, :, ::-1]
     depth = np.load(depth_path)["depth"]
     h, w = depth.shape
@@ -71,10 +94,12 @@ def create_zoom_animation(img_path, depth_path, dolly_plane_depth=15, output_dir
     n_frames = 30
     scales = np.linspace(1.0, 1.5, n_frames) # 放大倍率
     mask = get_soft_mask(depth, dolly_plane_depth, transition_width=1.0)
+    # blended = img * mask + warped * (1 - mask)
 
     for idx, scale in tqdm(enumerate(scales), total=n_frames):
         warped = warp_background(img, depth, K, scale=scale, dolly_plane_depth=dolly_plane_depth)
-        # out_path = os.path.join(output_dir, f"frame_{idx:03d}.png")
+        # mask = get_soft_mask_with_color(img, warped, depth, dolly_plane_depth, transition_width=1.0, color_threshold=30)
+        # blended = img * mask + warped * (1 - mask)
         # cv2.imwrite(out_path, cv2.cvtColor(warped, cv2.COLOR_RGB2BGR))
         blended = img * mask[..., np.newaxis] + warped * (1 - mask[..., np.newaxis])
         blended = np.clip(blended, 0, 255).astype(np.uint8)
@@ -89,10 +114,10 @@ def create_zoom_animation(img_path, depth_path, dolly_plane_depth=15, output_dir
         frame = cv2.imread(os.path.join(output_dir, f"frame_{idx:03d}.png"))
         video.write(frame)
     video.release()
-    print(f"✅ 動畫已完成，儲存於 {video_name}")
+    print(f"動畫已完成，儲存於 {video_name}")
 
 if __name__ == "__main__":
-    img_path = './img/raw/pic1.png'
+    img_path = './img/raw/test1.png'
     # depth_path = './img/raw/pic1depth.jpg'
-    depth_path = './img/output/pic1.npz'
+    depth_path = './img/output/test1.npz'
     create_zoom_animation(img_path, depth_path, dolly_plane_depth=20)

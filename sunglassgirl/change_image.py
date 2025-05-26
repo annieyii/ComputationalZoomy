@@ -15,23 +15,29 @@ from PIL import Image
 SRC_DIR      = Path("./images")    # 你原始圖片資料夾
 DST_DIR      = Path("./changes_images")  # 重新命名＋調整大小後要放哪裡
 NAME_PATTERN = "img_{:05d}.jpg"        # 00001, 00002, …；改成你想要的格式
-TARGET_W     = 2048                    # 目標寬
-TARGET_H     = 1536                    # 目標高
+TARGET_W     = 780                    # 目標寬
+TARGET_H     = 1170                    # 目標高
 KEEP_RATIO   = False                   # True => 等比縮放並填黑邊；False => 直接拉伸/裁切
 OVERWRITE    = False                   # 已存在同名檔案時是否覆蓋
 # ====================================== #
 
 def resize_image(im: Image.Image) -> Image.Image:
-    if KEEP_RATIO:
-        # 等比縮放，然後補邊 (letterbox)
-        im.thumbnail((TARGET_W, TARGET_H), Image.LANCZOS)
+    w, h = im.size
+    left   = max((w - TARGET_W) // 2, 0)
+    upper  = max((h - TARGET_H) // 2, 0)
+    right  = min(left + TARGET_W, w)
+    lower  = min(upper + TARGET_H, h)
+
+    # 若圖片太小無法裁切，則擴展填黑邊
+    if right - left < TARGET_W or lower - upper < TARGET_H:
         new_im = Image.new("RGB", (TARGET_W, TARGET_H), (0, 0, 0))
-        offset = ((TARGET_W - im.width) // 2, (TARGET_H - im.height) // 2)
-        new_im.paste(im, offset)
+        crop = im.crop((left, upper, right, lower))
+        paste_x = (TARGET_W - (right - left)) // 2
+        paste_y = (TARGET_H - (lower - upper)) // 2
+        new_im.paste(crop, (paste_x, paste_y))
         return new_im
     else:
-        # 直接 resize 成固定大小（可能會變形）
-        return im.resize((TARGET_W, TARGET_H), Image.LANCZOS)
+        return im.crop((left, upper, right, lower))
 
 def main():
     DST_DIR.mkdir(parents=True, exist_ok=True)
