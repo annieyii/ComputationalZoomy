@@ -1,7 +1,5 @@
-# hole_filler_weighted.py – CPU 版 ULR-style 補洞器
-# ==============================================
-# ※ 該檔使用 COLMAP 的 text 輸出 (cameras.txt / images.txt)
-# ※ 讓行過 CZ warped 後的前景 warped1 不更動，背景 warped2 需要補洞，只補補有洞的部份
+# 使用 COLMAP 的 text 輸出 (cameras.txt / images.txt)
+# 前景 warped1 不更動，背景 warped2 需要補洞，只補補有洞的部份
 
 from __future__ import annotations
 import argparse, os
@@ -96,7 +94,9 @@ def promote_background_to_foreground(img1, img2, depth1, depth2, dolly_plane_dep
 
 def get_soft_mask_with_color(img, warped_img, depth, dolly_plane_depth, transition_width=10.0, color_threshold=30.0):
     delta = depth - dolly_plane_depth
-    soft_mask = 1.0 / (1.0 + np.exp(delta / transition_width))
+    # soft_mask = 1.0 / (1.0 + np.exp(delta / transition_width))
+    x = np.clip(delta / transition_width, -60, 60)
+    soft_mask = 1.0 / (1.0 + np.exp(x))
 
     color_diff = np.linalg.norm(img.astype(np.float32) - warped_img.astype(np.float32), axis=2)
     color_mask = (color_diff < color_threshold).astype(np.float32)
@@ -137,7 +137,7 @@ def load_colmap_text(scene_dir: Path):
             names.append(img_name)
     return K, quats, poss, names, w, h
 
-# --- Geometry helpers ---
+# --- Geometry helpers --｀
 def quat_to_rot(q):
     w, x, y, z = q
     return np.array([
@@ -180,7 +180,7 @@ def compute_normals(depth: np.ndarray, fx, fy):
 def fill_holes_weighted(target_rgb: np.ndarray, hole_mask: np.ndarray,
                         ref_depth: np.ndarray, ref_normal: np.ndarray,
                         mvps: List[np.ndarray], K: np.ndarray,
-                        stack_imgs: np.ndarray, z_plane: float,
+                        stack_imgs: np.ndarray, stack_depths: np.ndarray, z_plane: float,
                         top_k: int = 4 , frame_index=0):
     H, W = ref_depth.shape
     fx, fy, cx, cy = K[0,0], K[1,1], K[0,2], K[1,2]
@@ -198,7 +198,7 @@ def fill_holes_weighted(target_rgb: np.ndarray, hole_mask: np.ndarray,
     scores = []
     samples = []
     with open("weight_log.txt", "a") as log_file:
-        for i, (img, P) in enumerate(tqdm(zip(stack_imgs, mvps), total=len(stack_imgs), desc='weight blend')):
+        for i, (img, dep, P) in enumerate(tqdm(zip(stack_imgs, stack_depths, mvps), total=len(stack_imgs), desc='weight blend')):
             uvw = np.einsum('hwc,dc->hwd', np.dstack([dirs, np.ones_like(ref_depth)]), P.T)
             z = uvw[..., 2]
             u = (uvw[..., 0] / z).astype(np.float32)
@@ -311,15 +311,32 @@ def create_composited_zoom(img1_path: str, depth1_path: str,
     # ---------- 載入 COLMAP 場景 ----------
     K, quats, poss, names, _, _ = load_colmap_text(stack_dir)
     fx = K[0,0]; fy = K[1,1]
-    # stack_imgs = np.stack([
-    #     cv2.cvtColor(cv2.imread(str(stack_dir / 'images' / nm)), cv2.COLOR_BGR2RGB)
-    #     for nm in names
-    # ])
     stack_imgs = np.stack([
         cv2.resize(cv2.cvtColor(cv2.imread(str(stack_dir / 'images' / nm)), cv2.COLOR_BGR2RGB), (W, H))
         for nm in names
     ])
     mvps = [build_proj(K, quat_to_rot(q), t) for q, t in zip(quats, poss)]
+    stack_imgs = []
+    stack_depths = []
+    for nm in names:
+        img_path = stack_dir / 'images' / nm
+        basename = Path(nm).stem  # 例如 img_00001
+        depth_path = stack_dir / 'depth_outputs' / f"{basename}.npy" / f"{basename}.npz"
+
+        # 讀圖
+        img = cv2.resize(cv2.cvtColor(cv2.imread(str(img_path)), cv2.COLOR_BGR2RGB), (W, H))
+        stack_imgs.append(img)
+
+        # 讀深度
+        if depth_path.exists():
+            depth = np.load(str(depth_path))['depth']
+            depth = cv2.resize(depth, (W, H))
+            stack_depths.append(depth)
+        else:
+            print(f"❌ 找不到對應的深度檔案: {depth_path}")
+            stack_depths.append(np.zeros((H, W), dtype=np.float32))  # fallback
+    stack_imgs = np.stack(stack_imgs)
+    stack_depths = np.stack(stack_depths)
 
     # ---------- 建立影片與暫存資料夾 ----------
     tmp_dir = Path('zoom_frames')
@@ -370,12 +387,15 @@ def create_composited_zoom(img1_path: str, depth1_path: str,
         patched_dir.mkdir(exist_ok=True)
         ref_normal = compute_normals(depth2, fx, fy)
         filled, patched, samples, scores = fill_holes_weighted(warped2, hole_mask, depth2, ref_normal,
-                             mvps, K, stack_imgs, dolly_plane_depth, frame_index=fi)
+                             mvps, K, stack_imgs, stack_depths, z_plane=dolly_plane_depth, frame_index=fi)
 
         save_debug_visualizations(samples, scores, hole_mask, Path("debug_output"))
         patch = np.zeros_like(patched)
         patch[hole_mask] = patched[hole_mask]
-
+        # --- 補洞後結果上加邊框顯示 hole_mask ---
+        hole_mask_uint8 = (hole_mask * 255).astype(np.uint8)
+        contours, _ = cv2.findContours(hole_mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
         patch_path = patched_dir / f'patch_{fi:03d}.png'
         cv2.imwrite(str(patch_path), cv2.cvtColor(patch, cv2.COLOR_RGB2BGR))
         # 4a. 尚未補洞的合成版本（可見破洞）
@@ -399,6 +419,9 @@ def create_composited_zoom(img1_path: str, depth1_path: str,
         blended = filled.copy()
         blended[foreground_mask] = warped1[foreground_mask]
         composed_filled = blended.astype(np.uint8)
+
+        composed_filled_bgr = cv2.cvtColor(composed_filled, cv2.COLOR_RGB2BGR)
+        cv2.drawContours(composed_filled_bgr, contours, -1, color=(0, 0, 255), thickness=1)
 
         # 5. 寫入影片與暫存圖片
         frame_path = tmp_dir / f'frame_{fi:03d}.png'
