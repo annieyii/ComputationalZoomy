@@ -6,4 +6,4 @@ python main.py \
   --stack_dir sunglassgirlimg    \
   --out       zoom.mp4             \
   --frames    30                   \
-  --dolly_z   5
+  --dolly_z   2.5
