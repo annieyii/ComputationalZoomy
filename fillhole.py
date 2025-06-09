@@ -365,8 +365,8 @@ def create_composited_zoom(img1_path: str, depth1_path: str,
 
         # 2. 後景 warping + 找破洞
         warped_fg_mask, _ = warp_image(foreground_mask.astype(np.float32), depth1, K, sc, dolly_plane_depth)
-        # warped2, _ = warp_image(img2, depth2, K, sc, dolly_plane_depth)
-        warped2, _, soft_mask = warp_image(img2, depth2, K, sc, dolly_plane_depth, use_soft_mask=True)
+        warped2, _ = warp_image(img2, depth2, K, sc, dolly_plane_depth)
+        # warped2, _, soft_mask = warp_image(img2, depth2, K, sc, dolly_plane_depth, use_soft_mask=True)
         # 建立原始空間下的破洞區域：前景擋住背景的地方
         hole_mask_raw = (depth1 <= dolly_plane_depth)  # 前景所在區域
 
@@ -410,7 +410,8 @@ def create_composited_zoom(img1_path: str, depth1_path: str,
         composed_raw[depth1 <= dolly_plane_depth] = warped1[depth1 <= dolly_plane_depth]
 
         # 4b. 補洞後的合成版本（完整）
-        warped2, _, soft_mask = warp_image(img2, depth2, K, sc, dolly_plane_depth, use_soft_mask=True)
+        # warped2, _, soft_mask = warp_image(img2, depth2, K, sc, dolly_plane_depth, use_soft_mask=True)
+        warped2, _ = warp_image(img2, depth2, K, sc, dolly_plane_depth, use_soft_mask=True)
         blended = filled.copy()
         blended[foreground_mask] = warped1[foreground_mask]
         composed_filled = blended.astype(np.uint8)
