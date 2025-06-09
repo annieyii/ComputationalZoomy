@@ -46,36 +46,47 @@ def warp_image(img, depth, K, scale, dolly_plane_depth, use_soft_mask=False):
     fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
     i, j = np.meshgrid(np.arange(w), np.arange(h))
     
+    # 將每個像素根據深度反投影為 3D 空間點 (x, y, z)
     x = (i - cx) * depth / fx
     y = (j - cy) * depth / fy
     z = depth
-
     points = np.stack([x, y, z], axis=-1)
+
+    # 建立遮罩：只有 dolly_plane 之後（背景）需要變形
     mask = depth > dolly_plane_depth
-    # points[mask, :2] /= scale  # 傷影區域做縮放
+
+    # 將 3D 點投影回原始影像空間取得像素座標 (x_img, y_img)
     x_img = fx * points[..., 0] / points[..., 2] + cx
     y_img = fy * points[..., 1] / points[..., 2] + cy
 
+    # 定義影像中心點（用於後續的縮放）
     x_center = w / 2
     y_center = h / 2
 
+    # 對背景區域做 Dolly Zoom 視角變形（以中心為基準縮放）
     x_img[mask] = (x_img[mask] - x_center) / scale + x_center
     y_img[mask] = (y_img[mask] - y_center) / scale + y_center
 
-    # 投影回 3D 空間
+    # 將變形後的影像座標投影回 3D 空間（保持深度不變）
     points[..., 0] = (x_img - cx) * points[..., 2] / fx
     points[..., 1] = (y_img - cy) * points[..., 2] / fy
 
+    # 再次將 3D 點投影成像素座標 (u, v)
     u = fx * points[..., 0] / points[..., 2] + cx
     v = fy * points[..., 1] / points[..., 2] + cy
+
+    # 建立 remap 所需的座標對應圖
     map_x = u.astype(np.float32)
     map_y = v.astype(np.float32)
+
+    # 使用 OpenCV 對影像做重新取樣，產生扭曲後的圖像
     warped = cv2.remap(img, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
-    if use_soft_mask:
-        soft_mask = get_soft_mask_with_color(img, warped, depth, dolly_plane_depth)
-        return warped, mask, soft_mask
-    else:
-        return warped, mask
+    
+    # if use_soft_mask:
+    #     soft_mask = get_soft_mask_with_color(img, warped, depth, dolly_plane_depth)
+    #     return warped, mask, soft_mask
+    # else:
+    return warped, mask
 
 # ========== 前景重建增強 ==========
 def promote_background_to_foreground(img1, img2, depth1, depth2, dolly_plane_depth, similarity_thresh=0.9, depth_thresh=2.0):
@@ -92,17 +103,17 @@ def promote_background_to_foreground(img1, img2, depth1, depth2, dolly_plane_dep
     updated_fg_mask = mask_fg | promote_mask
     return updated_fg_mask
 
-def get_soft_mask_with_color(img, warped_img, depth, dolly_plane_depth, transition_width=10.0, color_threshold=30.0):
-    delta = depth - dolly_plane_depth
-    # soft_mask = 1.0 / (1.0 + np.exp(delta / transition_width))
-    x = np.clip(delta / transition_width, -60, 60)
-    soft_mask = 1.0 / (1.0 + np.exp(x))
+# def get_soft_mask_with_color(img, warped_img, depth, dolly_plane_depth, transition_width=10.0, color_threshold=30.0):
+#     delta = depth - dolly_plane_depth
+#     # soft_mask = 1.0 / (1.0 + np.exp(delta / transition_width))
+#     x = np.clip(delta / transition_width, -60, 60)
+#     soft_mask = 1.0 / (1.0 + np.exp(x))
 
-    color_diff = np.linalg.norm(img.astype(np.float32) - warped_img.astype(np.float32), axis=2)
-    color_mask = (color_diff < color_threshold).astype(np.float32)
+#     color_diff = np.linalg.norm(img.astype(np.float32) - warped_img.astype(np.float32), axis=2)
+#     color_mask = (color_diff < color_threshold).astype(np.float32)
 
-    final_mask = soft_mask * color_mask
-    return cv2.GaussianBlur(final_mask, (5,5), 0)[..., np.newaxis]  # 平滑處理
+#     final_mask = soft_mask * color_mask
+#     return cv2.GaussianBlur(final_mask, (5,5), 0)[..., np.newaxis]  # 平滑處理
 
 # --- Camera intrinsics loader (from COLMAP text) ---
 def load_colmap_text(scene_dir: Path):
@@ -215,15 +226,13 @@ def fill_holes_weighted(target_rgb: np.ndarray, hole_mask: np.ndarray,
 
             w1 = angle_weight(ref_normal, view_dir)
             w2 = distance_weight(ref_depth, z_plane)
-            w3 = np.ones_like(w1)
 
-            # rim_w_color = np.exp(-np.linalg.norm(proj_sample - rim_color, axis=-1) / 50.0)
             rim_w_color = np.exp(-np.linalg.norm(proj_sample - rim_color, axis=-1) / 20.0)
             rim_w_normal = np.clip((ref_normal @ rim_normal) / (np.linalg.norm(ref_normal, axis=-1) * np.linalg.norm(rim_normal) + 1e-6), 0, 1)
             rim_w_depth = np.exp(-np.abs(ref_depth - rim_depth) / 10.0)
 
             rim_weight = rim_w_color * rim_w_normal * rim_w_depth
-            total = w1 * w2 * w3 * rim_weight
+            total = w1 * w2 * rim_weight
 
             scores.append(total)
             samples.append(proj_sample)
@@ -333,7 +342,7 @@ def create_composited_zoom(img1_path: str, depth1_path: str,
             depth = cv2.resize(depth, (W, H))
             stack_depths.append(depth)
         else:
-            print(f"❌ 找不到對應的深度檔案: {depth_path}")
+            print(f"找不到對應的深度檔案: {depth_path}")
             stack_depths.append(np.zeros((H, W), dtype=np.float32))  # fallback
     stack_imgs = np.stack(stack_imgs)
     stack_depths = np.stack(stack_depths)
@@ -351,12 +360,10 @@ def create_composited_zoom(img1_path: str, depth1_path: str,
     for fi, sc in enumerate(tqdm(scales, desc='frames')):
         # 1. 前景固定（不變）
         warped1 = img1.copy()
-        warped1_mask = foreground_mask 
-
+        # warped1_mask = foreground_mask 
         # foreground_mask = depth1 <= dolly_plane_depth
 
         # 2. 後景 warping + 找破洞
-        # warped_fg_mask, _ = warp_image(foreground_mask.astype(np.float32), depth1, K, sc, dolly_plane_depth)
         warped_fg_mask, _ = warp_image(foreground_mask.astype(np.float32), depth1, K, sc, dolly_plane_depth)
         # warped2, _ = warp_image(img2, depth2, K, sc, dolly_plane_depth)
         warped2, _, soft_mask = warp_image(img2, depth2, K, sc, dolly_plane_depth, use_soft_mask=True)
@@ -403,19 +410,7 @@ def create_composited_zoom(img1_path: str, depth1_path: str,
         composed_raw[depth1 <= dolly_plane_depth] = warped1[depth1 <= dolly_plane_depth]
 
         # 4b. 補洞後的合成版本（完整）
-        # warped2, _, soft_mask = warp_image(img2, depth2, K, sc, dolly_plane_depth)
         warped2, _, soft_mask = warp_image(img2, depth2, K, sc, dolly_plane_depth, use_soft_mask=True)
-        # 確保 soft_mask shape 為 (H, W, 1)
-        # blended = np.zeros_like(filled, dtype=np.float32)
-        # foreground_mask_expanded = foreground_mask[..., np.newaxis]  # shape (H, W, 1)
-
-        # # 前景區域保留 warped1，不受 soft mask 混合影響
-        # blended = warped1 * foreground_mask_expanded + \
-        #         (warped1 * soft_mask + filled * (1 - soft_mask)) * (1 - foreground_mask_expanded)
-
-        # composed_filled = blended.astype(np.uint8)
-        # # composed_filled = filled.copy()
-        # composed_filled[depth1 <= dolly_plane_depth] = warped1[depth1 <= dolly_plane_depth]
         blended = filled.copy()
         blended[foreground_mask] = warped1[foreground_mask]
         composed_filled = blended.astype(np.uint8)
@@ -430,16 +425,4 @@ def create_composited_zoom(img1_path: str, depth1_path: str,
         vw_raw.write(cv2.cvtColor(composed_raw, cv2.COLOR_RGB2BGR))
     vw_filled.release()
     vw_raw.release()
-    print(f'\n✅ 輸出影片完成：{video_name}（補洞後）、zoom_raw.mp4（補洞前）')
-
-# 启動 CLI
-# if __name__ == '__main__':
-#     ap = argparse.ArgumentParser()
-#     ap.add_argument('--img1', required=True); ap.add_argument('--depth1', required=True)
-#     ap.add_argument('--img2', required=True); ap.add_argument('--depth2', required=True)
-#     ap.add_argument('--stack_dir', required=True, type=Path)
-#     ap.add_argument('--out', default='repaired.png'); ap.add_argument('--frames', type=int, default=30)
-#     ap.add_argument('--dolly_z', type=float, default=20.0)
-#     args = ap.parse_args()
-#     create_composited_zoom(args.img1, args.depth1, args.img2, args.depth2,
-#                            args.stack_dir, args.frames, args.dolly_z, args.out)
+    print(f'\n 輸出影片完成：{video_name}（補洞後）、zoom_raw.mp4（補洞前）')
