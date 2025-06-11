@@ -1,9 +1,7 @@
 python main.py \
-  --img1      img/raw/pic1.png   \
-  --depth1    img/output/pic1.npz \
-  --img2      img/raw/pic2.png   \
-  --depth2    img/output/pic2.npz \
+  --img1      img/raw/img_00014.jpg   \
+  --depth1    img/output/img_00014.npz \
   --stack_dir sunglassgirlimg    \
   --out       zoom.mp4             \
-  --frames    30                   \
-  --dolly_z   2.5
+  --frames    5                   \
+  --dolly_z   10
