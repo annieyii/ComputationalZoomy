@@ -3,5 +3,5 @@ python main.py \
   --depth1    img/output/img_00014.npz \
   --stack_dir sunglassgirlimg    \
   --out       zoom.mp4             \
-  --frames    5                   \
+  --frames    30                   \
   --dolly_z   10
