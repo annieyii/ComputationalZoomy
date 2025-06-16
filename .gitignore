@@ -178,3 +178,12 @@ cython_debug/
 
 # MacOS
 .DS_Store
+
+# output images
+top1_sources/
+zoom_depth/
+zoom_frames/
+selected_warped/
+
+# output videos
+output_video/

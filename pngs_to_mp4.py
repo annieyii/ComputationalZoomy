@@ -18,7 +18,7 @@ frame = cv2.imread(os.path.join(image_folder, images[0]))
 height, width, layers = frame.shape
 
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-video = cv2.VideoWriter(str(video_name), fourcc, 1, (width, height))
+video = cv2.VideoWriter(str(video_name), fourcc, 3, (width, height))
 
 for image in images:
     img_path = os.path.join(image_folder, image)

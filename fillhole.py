@@ -157,10 +157,13 @@ def compute_normals(depth: np.ndarray, fx, fy):
     return n  # shape (H,W,3)
 
 # def select_best_background(stack_imgs, stack_depths, mvps, K, scale, dolly_plane_depth, W, H):
-def select_best_background(stack_imgs, stack_depths, mvps, K, scale, dolly_plane_depth, W, H, frame_index):
+def select_best_background(stack_imgs, stack_depths, mvps, K, scale, 
+                           dolly_plane_depth, W, H, frame_index):
     fx, fy, cx, cy = K[0,0], K[1,1], K[0,2], K[1,2]
     i_grid, j_grid = np.meshgrid(np.arange(W), np.arange(H))
-    dirs = np.stack([(i_grid - cx) / fx, (j_grid - cy) / fy, np.ones_like(i_grid)], axis=-1)
+    dirs = np.stack([(i_grid - cx) / fx, 
+                     (j_grid - cy) / fy, 
+                     np.ones_like(i_grid)], axis=-1)
     view_dir = dirs / np.linalg.norm(dirs, axis=-1, keepdims=True)
 
     best_score = -np.inf
@@ -197,91 +200,91 @@ def select_best_background(stack_imgs, stack_depths, mvps, K, scale, dolly_plane
 
     return best_img, best_depth, best_index
 # --- Main weighted fill ---
-# def fill_holes_weighted(target_rgb: np.ndarray, hole_mask: np.ndarray,
-#                         ref_depth: np.ndarray, ref_normal: np.ndarray,
-#                         mvps: List[np.ndarray], K: np.ndarray,
-#                         stack_imgs: np.ndarray, stack_depths: np.ndarray, z_plane: float,
-#                         top_k: int = 4 , frame_index=0):
-#     H, W = ref_depth.shape
-#     fx, fy, cx, cy = K[0,0], K[1,1], K[0,2], K[1,2]
-#     i, j = np.meshgrid(np.arange(W), np.arange(H))
-#     dirs = np.stack([(i - cx) / fx, (j - cy) / fy, np.ones_like(i)], axis=-1)
+def fill_holes_weighted(target_rgb: np.ndarray, hole_mask: np.ndarray,
+                        ref_depth: np.ndarray, ref_normal: np.ndarray,
+                        mvps: List[np.ndarray], K: np.ndarray,
+                        stack_imgs: np.ndarray, stack_depths: np.ndarray, z_plane: float,
+                        top_k: int = 4 , frame_index=0):
+    H, W = ref_depth.shape
+    fx, fy, cx, cy = K[0,0], K[1,1], K[0,2], K[1,2]
+    i, j = np.meshgrid(np.arange(W), np.arange(H))
+    dirs = np.stack([(i - cx) / fx, (j - cy) / fy, np.ones_like(i)], axis=-1)
 
-#     # --- 新增：洞口周圍特徵參考 ---
-#     kernel = np.ones((5, 5), np.uint8)
-#     dilated = binary_dilation(hole_mask, structure=kernel)
-#     rim_mask = dilated & (~hole_mask)
-#     rim_color = target_rgb[rim_mask].mean(axis=0) if rim_mask.any() else np.array([0, 0, 0])
-#     rim_normal = ref_normal[rim_mask].mean(axis=0) if rim_mask.any() else np.array([0, 0, 1])
-#     rim_depth = ref_depth[rim_mask].mean() if rim_mask.any() else z_plane
+    # --- 新增：洞口周圍特徵參考 ---
+    kernel = np.ones((5, 5), np.uint8)
+    dilated = binary_dilation(hole_mask, structure=kernel)
+    rim_mask = dilated & (~hole_mask)
+    rim_color = target_rgb[rim_mask].mean(axis=0) if rim_mask.any() else np.array([0, 0, 0])
+    rim_normal = ref_normal[rim_mask].mean(axis=0) if rim_mask.any() else np.array([0, 0, 1])
+    rim_depth = ref_depth[rim_mask].mean() if rim_mask.any() else z_plane
 
-#     scores = []
-#     samples = []
-#     with open("weight_log.txt", "a") as log_file:
-#         for i, (img, dep, P) in enumerate(tqdm(zip(stack_imgs, stack_depths, mvps), total=len(stack_imgs), desc='weight blend')):
-#             uvw = np.einsum('hwc,dc->hwd', np.dstack([dirs, np.ones_like(ref_depth)]), P.T)
-#             z = uvw[..., 2]
-#             u = (uvw[..., 0] / z).astype(np.float32)
-#             v = (uvw[..., 1] / z).astype(np.float32)
-#             proj_sample = cv2.remap(img, u, v, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
+    scores = []
+    samples = []
+    with open("weight_log.txt", "a") as log_file:
+        for i, (img, dep, P) in enumerate(tqdm(zip(stack_imgs, stack_depths, mvps), total=len(stack_imgs), desc='weight blend')):
+            uvw = np.einsum('hwc,dc->hwd', np.dstack([dirs, np.ones_like(ref_depth)]), P.T)
+            z = uvw[..., 2]
+            u = (uvw[..., 0] / z).astype(np.float32)
+            v = (uvw[..., 1] / z).astype(np.float32)
+            proj_sample = cv2.remap(img, u, v, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
 
-#             view_dir = dirs / np.linalg.norm(dirs, axis=-1, keepdims=True)
-#             mean_ref_normal = ref_normal[hole_mask].mean(axis=0)
-#             mean_view_dir = view_dir[hole_mask].mean(axis=0)
-#             angle_cosine = np.dot(mean_ref_normal, mean_view_dir) / (
-#                 np.linalg.norm(mean_ref_normal) * np.linalg.norm(mean_view_dir) + 1e-6
-#             )
-#             log_file.write(f"[frame {frame_index:03d}][camera {i:02d}] mean cos(angle): {angle_cosine:.4f} (dot of means)\n")
+            view_dir = dirs / np.linalg.norm(dirs, axis=-1, keepdims=True)
+            mean_ref_normal = ref_normal[hole_mask].mean(axis=0)
+            mean_view_dir = view_dir[hole_mask].mean(axis=0)
+            angle_cosine = np.dot(mean_ref_normal, mean_view_dir) / (
+                np.linalg.norm(mean_ref_normal) * np.linalg.norm(mean_view_dir) + 1e-6
+            )
+            log_file.write(f"[frame {frame_index:03d}][camera {i:02d}] mean cos(angle): {angle_cosine:.4f} (dot of means)\n")
 
-#             w1 = angle_weight(ref_normal, view_dir)
-#             w2 = distance_weight(ref_depth, z_plane)
+            w1 = angle_weight(ref_normal, view_dir)
+            w2 = distance_weight(ref_depth, z_plane)
 
-#             rim_w_color = np.exp(-np.linalg.norm(proj_sample - rim_color, axis=-1) / 20.0)
-#             rim_w_normal = np.clip((ref_normal @ rim_normal) / (np.linalg.norm(ref_normal, axis=-1) * np.linalg.norm(rim_normal) + 1e-6), 0, 1)
-#             rim_w_depth = np.exp(-np.abs(ref_depth - rim_depth) / 10.0)
+            rim_w_color = np.exp(-np.linalg.norm(proj_sample - rim_color, axis=-1) / 20.0)
+            rim_w_normal = np.clip((ref_normal @ rim_normal) / (np.linalg.norm(ref_normal, axis=-1) * np.linalg.norm(rim_normal) + 1e-6), 0, 1)
+            rim_w_depth = np.exp(-np.abs(ref_depth - rim_depth) / 10.0)
 
-#             rim_weight = rim_w_color * rim_w_normal * rim_w_depth
-#             total = w1 * w2 * rim_weight
+            rim_weight = rim_w_color * rim_w_normal * rim_w_depth
+            total = w1 * w2 * rim_weight
 
-#             scores.append(total)
-#             samples.append(proj_sample)
+            scores.append(total)
+            samples.append(proj_sample)
 
-#         scores = np.stack(scores)
-#         samples = np.stack(samples)
+        scores = np.stack(scores)
+        samples = np.stack(samples)
 
-#         topk_idx = np.argsort(-scores, axis=0)[:top_k]
-#         topk_w = np.take_along_axis(scores, topk_idx, axis=0)
-#         topk_img = np.take_along_axis(samples, topk_idx[..., None], axis=0)
+        topk_idx = np.argsort(-scores, axis=0)[:top_k]
+        topk_w = np.take_along_axis(scores, topk_idx, axis=0)
+        topk_img = np.take_along_axis(samples, topk_idx[..., None], axis=0)
 
-#         topk_w = np.clip(topk_w, 1e-6, None)
-#         topk_w /= np.sum(topk_w, axis=0, keepdims=True)
+        topk_w = np.clip(topk_w, 1e-6, None)
+        topk_w /= np.sum(topk_w, axis=0, keepdims=True)
 
-#         top1_idx = topk_idx[0]
-#         out = target_rgb.copy()
-#         for idx in np.unique(top1_idx[hole_mask]):
-#             mask_i = (top1_idx == idx) & hole_mask
-#             out[mask_i] = stack_imgs[idx][mask_i]
-#         # 回復 debug 可視化：將 top1 index 所用影像標記出來
-#         top1_img = np.zeros_like(target_rgb)
-#         for idx in np.unique(top1_idx):
-#             mask_i = (top1_idx == idx) & hole_mask  # 只處理洞區域
-#             top1_img[mask_i] = stack_imgs[idx][mask_i]
-#         debug_dir = Path("top1_sources")
-#         debug_dir.mkdir(exist_ok=True)
+        top1_idx = topk_idx[0]
+        out = target_rgb.copy()
+        for idx in np.unique(top1_idx[hole_mask]):
+            mask_i = (top1_idx == idx) & hole_mask
+            out[mask_i] = stack_imgs[idx][mask_i]
+        # 回復 debug 可視化：將 top1 index 所用影像標記出來
+        top1_img = np.zeros_like(target_rgb)
+        for idx in np.unique(top1_idx):
+            mask_i = (top1_idx == idx) & hole_mask  # 只處理洞區域
+            top1_img[mask_i] = stack_imgs[idx][mask_i]
+        debug_dir = Path("top1_sources")
+        debug_dir.mkdir(exist_ok=True)
 
-#         # 找出每張圖片有貢獻的像素位置，畫出黃點
-#         unique_sources = np.unique(top1_idx[hole_mask])
-#         for idx in unique_sources:
-#             positions = np.argwhere((top1_idx == idx) & hole_mask)
-#             if positions.size == 0:
-#                 continue
-#             source_img = stack_imgs[idx].copy()
-#             for y, x in positions:
-#                 cv2.circle(source_img, (x, y), radius=2, color=(0, 255, 255), thickness=-1)
-#             save_path = debug_dir / f"source_{idx:02d}_frame{frame_index:03d}.png"
-#             cv2.imwrite(str(save_path), cv2.cvtColor(source_img, cv2.COLOR_RGB2BGR))
+        # 找出每張圖片有貢獻的像素位置，畫出黃點
+        unique_sources = np.unique(top1_idx[hole_mask])
+        for idx in unique_sources:
+            positions = np.argwhere((top1_idx == idx) & hole_mask)
+            if positions.size == 0:
+                continue
+            source_img = stack_imgs[idx].copy()
+            for y, x in positions:
+                cv2.circle(source_img, (x, y), radius=2, color=(0, 255, 255), thickness=-1)
+            save_path = debug_dir / f"source_{idx:02d}_frame{frame_index:03d}.png"
+            cv2.imwrite(str(save_path), cv2.cvtColor(source_img, cv2.COLOR_RGB2BGR))
 
-#         return out.astype(np.uint8), out.astype(np.uint8), samples, scores
+        return out.astype(np.uint8), out.astype(np.uint8), samples, scores
 
    
 # 主程式：轉成動畫、遞擺前景不更動，背景補洞後 composite
@@ -333,7 +336,7 @@ def create_composited_zoom(img1_path: str, depth1_path: str,
 
 
     # ---------- 處理每一幀 ----------
-    depth = np.linspace(2.0, dolly_plane_depth, n_frames)
+    depth = np.linspace(3.0, dolly_plane_depth, n_frames)
     open("weight_log.txt", "w").close()
     for fi, dp in enumerate(tqdm(depth, desc='frames')):
         warped1 = img1.copy()
@@ -344,12 +347,16 @@ def create_composited_zoom(img1_path: str, depth1_path: str,
             stack_imgs, stack_depths, mvps, K, 1, dp, W, H, fi)
         
         foreground_mask = (depth1 <= dp)
-        composed = warped2.copy()
+        # === 找出洞 ===
+        hole_mask = (warped_hole_mask > 0.5) & (depth2_alt > dp)
+        # === 補洞 ===
+        ref_normal = compute_normals(depth2_alt, fx, fy)
+        filled, patched, samples, scores = fill_holes_weighted(
+            warped2, hole_mask, depth2_alt, ref_normal,
+            mvps, K, stack_imgs, stack_depths, z_plane=dp, frame_index=fi
+        )
+        composed = filled.copy()
         composed[foreground_mask] = warped1[foreground_mask]
-
-        # 補洞區域：原本是前景，但在變形背景中露出來了
-        # hole_mask = (warped_hole_mask > 0.5) & (depth2_alt > dolly_plane_depth)
-        # composed[hole_mask]  = [255, 0, 0]  # 將洞區塗成紅色
 
         frame_path = tmp_dir / f'depth_{dp}.png'
         cv2.imwrite(str(frame_path), cv2.cvtColor(composed, cv2.COLOR_RGB2BGR))

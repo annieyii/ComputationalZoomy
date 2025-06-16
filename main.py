@@ -35,7 +35,7 @@ def main() -> None:
         # img2_path=str(args.img2),
         # depth2_path=str(args.depth2),
         stack_dir=Path(args.stack_dir),
-        # n_frames=args.frames,
+        n_frames=args.frames,
         dolly_plane_depth=args.dolly_z,
         video_name=str(args.out),
     )
