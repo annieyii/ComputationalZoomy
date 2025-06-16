@@ -323,7 +323,8 @@ def create_composited_zoom(img1_path: str, depth1_path: str,
     mvps = [build_proj(K, quat_to_rot(q), t) for q, t in zip(quats, poss)]
 
     # ---------- 建立影片與暫存資料夾 ----------
-    tmp_dir = Path('zoom_frames')
+    # tmp_dir = Path('zoom_frames')
+    tmp_dir = Path('zoom_depth')
     tmp_dir.mkdir(exist_ok=True)
     # filled_dir = Path('filled_results')
     # filled_dir.mkdir(exist_ok=True)
@@ -332,17 +333,17 @@ def create_composited_zoom(img1_path: str, depth1_path: str,
 
 
     # ---------- 處理每一幀 ----------
-    scales = np.linspace(1.0, 1.5, n_frames)
+    depth = np.linspace(2.0, dolly_plane_depth, n_frames)
     open("weight_log.txt", "w").close()
-    for fi, sc in enumerate(tqdm(scales, desc='frames')):
+    for fi, dp in enumerate(tqdm(depth, desc='frames')):
         warped1 = img1.copy()
-        hole_mask_raw = (depth1 <= dolly_plane_depth)
-        warped_hole_mask, _ = warp_image(hole_mask_raw.astype(np.float32), depth1, K, sc, dolly_plane_depth)
+        hole_mask_raw = (depth1 <= dp)
+        warped_hole_mask, _ = warp_image(hole_mask_raw.astype(np.float32), depth1, K, 1, dp)
 
         warped2, depth2_alt, ref_idx = select_best_background(
-            stack_imgs, stack_depths, mvps, K, sc, dolly_plane_depth, W, H, fi)
+            stack_imgs, stack_depths, mvps, K, 1, dp, W, H, fi)
         
-        foreground_mask = (depth1 <= dolly_plane_depth)
+        foreground_mask = (depth1 <= dp)
         composed = warped2.copy()
         composed[foreground_mask] = warped1[foreground_mask]
 
@@ -350,9 +351,10 @@ def create_composited_zoom(img1_path: str, depth1_path: str,
         # hole_mask = (warped_hole_mask > 0.5) & (depth2_alt > dolly_plane_depth)
         # composed[hole_mask]  = [255, 0, 0]  # 將洞區塗成紅色
 
-        frame_path = tmp_dir / f'frame_{fi:03d}.png'
+        frame_path = tmp_dir / f'depth_{dp}.png'
         cv2.imwrite(str(frame_path), cv2.cvtColor(composed, cv2.COLOR_RGB2BGR))
         vw.write(cv2.cvtColor(composed, cv2.COLOR_RGB2BGR))
 
     vw.release()
     print(f'\n輸出完成：{video_name}（補洞後動畫')
+    print(f'{dolly_plane_depth}')
