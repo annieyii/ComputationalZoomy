@@ -1,10 +1,3 @@
-"""main.py – CLI entry-point
-================================
-Run the **Computational-Zoomy × ULR** pipeline end-to-end from the shell.
-
-Assumes `hole_filler_weighted.py` is in the same folder (importable).
-"""
-
 from __future__ import annotations
 
 import argparse
