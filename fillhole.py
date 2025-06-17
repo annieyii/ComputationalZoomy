@@ -82,38 +82,7 @@ def warp_image(img, depth, K, scale, dolly_plane_depth, use_soft_mask=False):
     # 使用 OpenCV 對影像做重新取樣，產生扭曲後的圖像
     warped = cv2.remap(img, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
     
-    # if use_soft_mask:
-    #     soft_mask = get_soft_mask_with_color(img, warped, depth, dolly_plane_depth)
-    #     return warped, mask, soft_mask
-    # else:
     return warped, mask
-
-# ========== 前景重建增強 ==========
-def promote_background_to_foreground(img1, img2, depth1, depth2, dolly_plane_depth, similarity_thresh=0.9, depth_thresh=2.0):
-    """
-    在 dolly plane 附近（前景邊緣）偵測與後景相似的區域，若顏色 + 深度皆相近，則將此區域視為前景，避免被當成洞口。
-    """
-    mask_fg = (depth1 <= dolly_plane_depth)
-    candidate = (depth2 > dolly_plane_depth) & (depth2 < dolly_plane_depth + depth_thresh)
-    img1_lab = cv2.cvtColor(img1, cv2.COLOR_RGB2LAB).astype(np.float32)
-    img2_lab = cv2.cvtColor(img2, cv2.COLOR_RGB2LAB).astype(np.float32)
-    diff = np.linalg.norm(img1_lab - img2_lab, axis=-1)
-    color_sim = np.exp(-diff / 20.0)
-    promote_mask = (color_sim > similarity_thresh) & candidate
-    updated_fg_mask = mask_fg | promote_mask
-    return updated_fg_mask
-
-# def get_soft_mask_with_color(img, warped_img, depth, dolly_plane_depth, transition_width=10.0, color_threshold=30.0):
-#     delta = depth - dolly_plane_depth
-#     # soft_mask = 1.0 / (1.0 + np.exp(delta / transition_width))
-#     x = np.clip(delta / transition_width, -60, 60)
-#     soft_mask = 1.0 / (1.0 + np.exp(x))
-
-#     color_diff = np.linalg.norm(img.astype(np.float32) - warped_img.astype(np.float32), axis=2)
-#     color_mask = (color_diff < color_threshold).astype(np.float32)
-
-#     final_mask = soft_mask * color_mask
-#     return cv2.GaussianBlur(final_mask, (5,5), 0)[..., np.newaxis]  # 平滑處理
 
 # --- Camera intrinsics loader (from COLMAP text) ---
 def load_colmap_text(scene_dir: Path):
@@ -187,6 +156,49 @@ def compute_normals(depth: np.ndarray, fx, fy):
     n /= np.linalg.norm(n, axis=-1, keepdims=True) + 1e-6
     return n  # shape (H,W,3)
 
+# def select_best_background(stack_imgs, stack_depths, mvps, K, scale, dolly_plane_depth, W, H):
+def select_best_background(stack_imgs, stack_depths, mvps, K, scale, 
+                           dolly_plane_depth, W, H, frame_index):
+    fx, fy, cx, cy = K[0,0], K[1,1], K[0,2], K[1,2]
+    i_grid, j_grid = np.meshgrid(np.arange(W), np.arange(H))
+    dirs = np.stack([(i_grid - cx) / fx, 
+                     (j_grid - cy) / fy, 
+                     np.ones_like(i_grid)], axis=-1)
+    view_dir = dirs / np.linalg.norm(dirs, axis=-1, keepdims=True)
+
+    best_score = -np.inf
+    best_img = None
+    best_depth = None
+    best_index = -1
+
+    # 建立儲存資料夾
+    warped_dir = Path("selected_warped")
+    warped_dir.mkdir(exist_ok=True)
+
+    for i, (img, dep, P) in enumerate(zip(stack_imgs, stack_depths, mvps)):
+        # warp 後背景
+        warped_img, _ = warp_image(img, dep, K, scale, dolly_plane_depth)
+        warped_depth, _ = warp_image(dep, dep, K, scale, dolly_plane_depth)
+
+        # normal 與角度一致性分數
+        ref_normal = compute_normals(dep, fx, fy)
+        angle_sim = angle_weight(ref_normal, view_dir)
+
+        # 只取背景區域來計分
+        bg_mask = (dep > dolly_plane_depth)
+        score = angle_sim[bg_mask].mean()
+
+        if score > best_score:
+            best_score = score
+            best_img = warped_img
+            best_depth = warped_depth
+            best_index = i
+
+    # 儲存所有 warped image（可選擇只存最佳者）
+    save_path = warped_dir / f"frame{frame_index:03d}_cam{i:02d}.png"
+    cv2.imwrite(str(save_path), cv2.cvtColor(best_img, cv2.COLOR_RGB2BGR))
+
+    return best_img, best_depth, best_index
 # --- Main weighted fill ---
 def fill_holes_weighted(target_rgb: np.ndarray, hole_mask: np.ndarray,
                         ref_depth: np.ndarray, ref_normal: np.ndarray,
@@ -274,156 +286,82 @@ def fill_holes_weighted(target_rgb: np.ndarray, hole_mask: np.ndarray,
 
         return out.astype(np.uint8), out.astype(np.uint8), samples, scores
 
-def save_debug_visualizations(samples, scores, hole_mask, out_dir: Path):
-    """
-    儲存每一張 stack 圖像的投影樣貌與權重 heatmap，方便 debug。
-    """
-    os.makedirs(out_dir / "proj_samples", exist_ok=True)
-    os.makedirs(out_dir / "weights", exist_ok=True)
-
-    n = len(samples)
-    for i in range(n):
-        img = samples[i]
-        weight = scores[i]
-
-        # Apply hole mask only for clarity
-        masked_img = img.copy()
-        masked_img[~hole_mask] = 0
-
-        weight_vis = (255 * (weight - weight.min()) / (weight.max() - weight.min() + 1e-6)).astype(np.uint8)
-        weight_vis_colored = cv2.applyColorMap(weight_vis, cv2.COLORMAP_JET)
-
-        cv2.imwrite(str(out_dir / "proj_samples" / f"proj_{i:02d}.png"), cv2.cvtColor(masked_img, cv2.COLOR_RGB2BGR))
-        cv2.imwrite(str(out_dir / "weights" / f"weight_{i:02d}.png"), weight_vis_colored)
-
    
 # 主程式：轉成動畫、遞擺前景不更動，背景補洞後 composite
 
 def create_composited_zoom(img1_path: str, depth1_path: str,
-                           img2_path: str, depth2_path: str,
                            stack_dir: Path, n_frames: int = 30,
                            dolly_plane_depth: float = 20.0,
                            video_name: str = 'zoom_filled.mp4'):
 
     # ---------- 載入前景、後景、深度 ----------
     img1 = cv2.cvtColor(cv2.imread(img1_path), cv2.COLOR_BGR2RGB)
-    img2 = cv2.cvtColor(cv2.imread(img2_path), cv2.COLOR_BGR2RGB)
     depth1 = np.load(depth1_path)['depth']
-    depth2 = np.load(depth2_path)['depth']
     H, W = depth1.shape
     img1 = cv2.resize(img1, (W, H))
-    img2 = cv2.resize(img2, (W, H))
-    depth2 = cv2.resize(depth2, (W, H))
-    # 更新前景遮罩：將與前景相似的背景也視為前景（避免誤補）
-    foreground_mask = promote_background_to_foreground(img1, img2, depth1, depth2, dolly_plane_depth)
 
     # ---------- 載入 COLMAP 場景 ----------
     K, quats, poss, names, _, _ = load_colmap_text(stack_dir)
     fx = K[0,0]; fy = K[1,1]
-    stack_imgs = np.stack([
-        cv2.resize(cv2.cvtColor(cv2.imread(str(stack_dir / 'images' / nm)), cv2.COLOR_BGR2RGB), (W, H))
-        for nm in names
-    ])
-    mvps = [build_proj(K, quat_to_rot(q), t) for q, t in zip(quats, poss)]
     stack_imgs = []
     stack_depths = []
     for nm in names:
         img_path = stack_dir / 'images' / nm
-        basename = Path(nm).stem  # 例如 img_00001
+        basename = Path(nm).stem
         depth_path = stack_dir / 'depth_outputs' / f"{basename}.npy" / f"{basename}.npz"
 
-        # 讀圖
         img = cv2.resize(cv2.cvtColor(cv2.imread(str(img_path)), cv2.COLOR_BGR2RGB), (W, H))
         stack_imgs.append(img)
 
-        # 讀深度
         if depth_path.exists():
             depth = np.load(str(depth_path))['depth']
             depth = cv2.resize(depth, (W, H))
             stack_depths.append(depth)
         else:
             print(f"找不到對應的深度檔案: {depth_path}")
-            stack_depths.append(np.zeros((H, W), dtype=np.float32))  # fallback
+            stack_depths.append(np.zeros((H, W), dtype=np.float32))
+
     stack_imgs = np.stack(stack_imgs)
     stack_depths = np.stack(stack_depths)
+    mvps = [build_proj(K, quat_to_rot(q), t) for q, t in zip(quats, poss)]
 
     # ---------- 建立影片與暫存資料夾 ----------
-    tmp_dir = Path('zoom_frames')
+    # tmp_dir = Path('zoom_frames')
+    tmp_dir = Path('zoom_depth')
     tmp_dir.mkdir(exist_ok=True)
+    # filled_dir = Path('filled_results')
+    # filled_dir.mkdir(exist_ok=True)
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    vw_filled = cv2.VideoWriter(str(video_name), fourcc, 10, (W, H))
-    vw_raw    = cv2.VideoWriter("zoom_raw.mp4", fourcc, 10, (W, H))
+    vw = cv2.VideoWriter(str(video_name), fourcc, 10, (W, H))
+
 
     # ---------- 處理每一幀 ----------
-    scales = np.linspace(1.0, 1.5, n_frames)
+    depth = np.linspace(3.0, dolly_plane_depth, n_frames)
     open("weight_log.txt", "w").close()
-    for fi, sc in enumerate(tqdm(scales, desc='frames')):
-        # 1. 前景固定（不變）
+    for fi, dp in enumerate(tqdm(depth, desc='frames')):
         warped1 = img1.copy()
-        # warped1_mask = foreground_mask 
-        # foreground_mask = depth1 <= dolly_plane_depth
+        hole_mask_raw = (depth1 <= dp)
+        warped_hole_mask, _ = warp_image(hole_mask_raw.astype(np.float32), depth1, K, 1, dp)
 
-        # 2. 後景 warping + 找破洞
-        warped_fg_mask, _ = warp_image(foreground_mask.astype(np.float32), depth1, K, sc, dolly_plane_depth)
-        warped2, _ = warp_image(img2, depth2, K, sc, dolly_plane_depth)
-        # warped2, _, soft_mask = warp_image(img2, depth2, K, sc, dolly_plane_depth, use_soft_mask=True)
-        # 建立原始空間下的破洞區域：前景擋住背景的地方
-        hole_mask_raw = (depth1 <= dolly_plane_depth)  # 前景所在區域
-
-        # warp 到目標空間以取得破洞位置
-        warped_hole_mask, _ = warp_image(hole_mask_raw.astype(np.float32), depth1, K, sc, dolly_plane_depth)
-        hole_mask = (warped_hole_mask > 0.5) & (depth2 > dolly_plane_depth)
-
-        hole_mask_vis_dir = Path("hole_masks")
-        hole_mask_vis_dir.mkdir(exist_ok=True)
-
-        # 2b. 儲存著色後的 hole mask 可視化圖（紅色顯示洞）
-        hole_vis = warped2.copy()
-        hole_vis[hole_mask] = [255, 0, 0]  # 標紅
-
-        cv2.imwrite(str(Path("hole_masks") / f"hole_{fi:03d}.png"), cv2.cvtColor(hole_vis, cv2.COLOR_RGB2BGR))
-
-        # 使用原始 warped2 圖當底，將 hole 處塗成紅色
-        hole_vis = warped2.copy()
-        hole_vis[hole_mask] = [255, 0, 0]  # 紅色
-
-        cv2.imwrite(str(hole_mask_vis_dir / f"hole_{fi:03d}.png"), cv2.cvtColor(hole_vis, cv2.COLOR_RGB2BGR))
-
-        # 3. 填補破洞   
-        patched_dir = Path('patched_chunks')
-        patched_dir.mkdir(exist_ok=True)
-        ref_normal = compute_normals(depth2, fx, fy)
-        filled, patched, samples, scores = fill_holes_weighted(warped2, hole_mask, depth2, ref_normal,
-                             mvps, K, stack_imgs, stack_depths, z_plane=dolly_plane_depth, frame_index=fi)
-
-        save_debug_visualizations(samples, scores, hole_mask, Path("debug_output"))
-        patch = np.zeros_like(patched)
-        patch[hole_mask] = patched[hole_mask]
-        # --- 補洞後結果上加邊框顯示 hole_mask ---
-        hole_mask_uint8 = (hole_mask * 255).astype(np.uint8)
-        contours, _ = cv2.findContours(hole_mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        warped2, depth2_alt, ref_idx = select_best_background(
+            stack_imgs, stack_depths, mvps, K, 1, dp, W, H, fi)
         
-        patch_path = patched_dir / f'patch_{fi:03d}.png'
-        cv2.imwrite(str(patch_path), cv2.cvtColor(patch, cv2.COLOR_RGB2BGR))
-        # 4a. 尚未補洞的合成版本（可見破洞）
-        composed_raw = warped2.copy()
-        composed_raw[depth1 <= dolly_plane_depth] = warped1[depth1 <= dolly_plane_depth]
+        foreground_mask = (depth1 <= dp)
+        # === 找出洞 ===
+        hole_mask = (warped_hole_mask > 0.5) & (depth2_alt > dp)
+        # === 補洞 ===
+        ref_normal = compute_normals(depth2_alt, fx, fy)
+        filled, patched, samples, scores = fill_holes_weighted(
+            warped2, hole_mask, depth2_alt, ref_normal,
+            mvps, K, stack_imgs, stack_depths, z_plane=dp, frame_index=fi
+        )
+        composed = filled.copy()
+        composed[foreground_mask] = warped1[foreground_mask]
 
-        # 4b. 補洞後的合成版本（完整）
-        # warped2, _, soft_mask = warp_image(img2, depth2, K, sc, dolly_plane_depth, use_soft_mask=True)
-        warped2, _ = warp_image(img2, depth2, K, sc, dolly_plane_depth, use_soft_mask=True)
-        blended = filled.copy()
-        blended[foreground_mask] = warped1[foreground_mask]
-        composed_filled = blended.astype(np.uint8)
+        frame_path = tmp_dir / f'depth_{dp}.png'
+        cv2.imwrite(str(frame_path), cv2.cvtColor(composed, cv2.COLOR_RGB2BGR))
+        vw.write(cv2.cvtColor(composed, cv2.COLOR_RGB2BGR))
 
-        composed_filled_bgr = cv2.cvtColor(composed_filled, cv2.COLOR_RGB2BGR)
-        cv2.drawContours(composed_filled_bgr, contours, -1, color=(0, 0, 255), thickness=1)
-
-        # 5. 寫入影片與暫存圖片
-        frame_path = tmp_dir / f'frame_{fi:03d}.png'
-        cv2.imwrite(str(frame_path), cv2.cvtColor(composed_filled, cv2.COLOR_RGB2BGR))
-        vw_filled.write(cv2.cvtColor(composed_filled, cv2.COLOR_RGB2BGR))
-        vw_raw.write(cv2.cvtColor(composed_raw, cv2.COLOR_RGB2BGR))
-    vw_filled.release()
-    vw_raw.release()
-    print(f'\n 輸出影片完成：{video_name}（補洞後）、zoom_raw.mp4（補洞前）')
+    vw.release()
+    print(f'\n輸出完成：{video_name}（補洞後動畫')
+    print(f'{dolly_plane_depth}')

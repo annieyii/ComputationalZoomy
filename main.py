@@ -17,8 +17,8 @@ def main() -> None:
 
     p.add_argument("--img1",      required=True, type=Path, help="foreground image #1 (PNG/JPG)")
     p.add_argument("--depth1",    required=True, type=Path, help="NumPy .npz depth of img1")
-    p.add_argument("--img2",      required=True, type=Path, help="background image #2")
-    p.add_argument("--depth2",    required=True, type=Path, help="NumPy .npz depth of img2")
+    # p.add_argument("--img2",      required=True, type=Path, help="background image #2")
+    # p.add_argument("--depth2",    required=True, type=Path, help="NumPy .npz depth of img2")
 
     p.add_argument("--stack_dir", required=True, type=Path,
                    help="COLMAP folder containing cameras.txt / images.txt / images/…")
@@ -32,8 +32,8 @@ def main() -> None:
     create_composited_zoom(
         img1_path=str(args.img1),
         depth1_path=str(args.depth1),
-        img2_path=str(args.img2),
-        depth2_path=str(args.depth2),
+        # img2_path=str(args.img2),
+        # depth2_path=str(args.depth2),
         stack_dir=Path(args.stack_dir),
         n_frames=args.frames,
         dolly_plane_depth=args.dolly_z,
